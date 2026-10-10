@@ -1,0 +1,23 @@
+# Render deployment: one web service serves BOTH the API and the built
+# frontend (the Docker image builds the Vite bundle, FastAPI serves `dist/`).
+#
+# Secrets (OPENAI_API_KEY, etc.) are set in the Render dashboard, never here.
+
+services:
+  - type: web
+    name: outstep
+    runtime: docker
+    plan: free
+    healthCheckPath: /api/health
+    envVars:
+      - key: AI_PROVIDER
+        value: "openai"
+      - key: OPENAI_BASE_URL
+        value: "https://api.openai.com/v1"
+      - key: OPENAI_MODEL
+        value: "gpt-4o-mini"
+      # Set these in the Render dashboard (Environment tab):
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: CORS_ORIGINS
+        value: "https://outstep.onrender.com"

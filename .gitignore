@@ -9,3 +9,18 @@ dist/
 build/
 .vscode/
 .idea/
+
+# Python test/build artefacts
+.pytest_cache/
+.coverage
+htmlcov/
+*.egg-info/
+
+# Logs & OS files
+npm-debug.log*
+*.log
+.DS_Store
+Thumbs.db
+
+# Local mission exports / scratch files
+*.local.json
