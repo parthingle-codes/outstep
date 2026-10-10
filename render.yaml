@@ -13,9 +13,9 @@ services:
       - key: AI_PROVIDER
         value: "openai"
       - key: OPENAI_BASE_URL
-        value: "https://api.openai.com/v1"
+        value: "https://integrate.api.nvidia.com/v1"
       - key: OPENAI_MODEL
-        value: "gpt-4o-mini"
+        value: "openai/gpt-oss-20b"
       # Set these in the Render dashboard (Environment tab):
       - key: OPENAI_API_KEY
         sync: false
