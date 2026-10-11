@@ -28,6 +28,8 @@ def good_payload() -> dict:
     return {
         "title": "Green Loop Discovery",
         "description": "A relaxed walk with three small noticing games along the way.",
+        "objective": "Come home able to name three details on your street you had never noticed.",
+        "archetype": "nature_bingo",
         "total_duration_minutes": 30,
         "completion_mode": "manual",
         "tasks": [
@@ -37,7 +39,8 @@ def good_payload() -> dict:
              "target_minutes": 6, "completion_mode": "timer"},
             {"instruction": "Find a bench and write one sentence about the light today.",
              "target_minutes": 10, "completion_mode": "manual"},
-            {"instruction": "Take a slow loop back home with your phone in your pocket.",
+            {"instruction": "Take a slow loop back home and count the doorways you pass "
+             "on the way.",
              "target_minutes": 6, "completion_mode": "manual"},
         ],
         "safety_notes": [

@@ -1,5 +1,6 @@
 import { CheckIcon, ClockIcon } from './Icons.jsx'
 import { activityLabel } from '../constants.js'
+import { archetypeBlurb, archetypeLabel, taskMinutesTotal } from '../lib/mission.js'
 
 export function SourceBadge({ mission }) {
   if (mission.source === 'sample') {
@@ -32,7 +33,8 @@ export function SafetyNotes({ notes }) {
 }
 
 export default function MissionCard({ mission, children }) {
-  const taskTotal = mission.tasks.reduce((sum, task) => sum + task.target_minutes, 0)
+  const taskTotal = taskMinutesTotal(mission.tasks)
+  const archetype = archetypeLabel(mission.archetype)
 
   return (
     <article className="mission-card">
@@ -40,7 +42,18 @@ export default function MissionCard({ mission, children }) {
         <SourceBadge mission={mission} />
         <h1 className="mission-card__title">{mission.title}</h1>
         <p className="mission-card__description">{mission.description}</p>
+        {mission.objective && (
+          <p className="mission-card__objective">
+            <span className="mission-card__objective-label">Your objective</span>
+            {mission.objective}
+          </p>
+        )}
         <div className="mission-card__meta">
+          {archetype && (
+            <span className="pill pill--archetype" title={archetypeBlurb(mission.archetype)}>
+              {archetype}
+            </span>
+          )}
           <span className="pill">{mission.total_duration_minutes} min planned</span>
           <span className="pill">{mission.tasks.length} tasks</span>
           <span className="pill">~{taskTotal} min of tasks</span>

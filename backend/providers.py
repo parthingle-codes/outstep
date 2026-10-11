@@ -20,12 +20,16 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
+from .archetypes import ArchetypeSpec, select_archetype
 from .config import Settings, get_settings
 from .schemas import Mission, MissionRequest
 from .validation import MissionValidationError, extract_json, raise_if_invalid, validate_mission
 
 REQUEST_TIMEOUT_SECONDS = 120.0
-MAX_ATTEMPTS = 2  # first attempt + one repair attempt driven by validation issues
+# First attempt + repair attempts driven by validation feedback. Mission
+# quality rules are strict (creativity first), so the model gets two
+# chances to fix itself before we surface an error.
+MAX_ATTEMPTS = 3
 
 
 class ProviderError(Exception):
@@ -179,16 +183,39 @@ def get_provider(settings: Optional[Settings] = None) -> BaseProvider:
 SYSTEM_PROMPT = """You are OutStep's mission planner: an upbeat outdoor guide who designs short,
 achievable missions for real people in ordinary public places (parks, streets, gardens,
 beaches, courtyards). You write for someone who wants to spend time away from their screen.
+Your missions must make people curious enough to leave the house.
+
+CREATIVITY IS THE TOP PRIORITY
+- Every mission is built around ONE mission archetype (a creative style). The user message
+  tells you which archetype to use and describes it. Write the whole mission - title, hook,
+  objective and tasks - in that style, and echo the archetype's id in your JSON.
+- NEVER pad a mission with generic filler. These are banned as tasks, alone or reworded:
+  "notice your surroundings", "observe your surroundings", "take in the view",
+  "listen to the sounds of nature", "relax and breathe", "look around",
+  "take a slow walk", "enjoy the fresh air". Walking, observing, listening and relaxing
+  are only allowed when attached to a concrete objective.
+- Every task must have ONE concrete objective: an exact thing to find, count, compare,
+  sketch, photograph, map or collect (for example: "spot three doors with house numbers
+  older than you", "count the red things between two lamp posts", "sketch the weirdest
+  texture within one metre"). If you cannot picture what 'done' looks like, rewrite it.
+- No two tasks may share an objective or be rewordings of each other. Different actions,
+  different targets, different senses. Four walk-and-notice variants = failed mission.
 
 STRICT OUTPUT RULES
 - Reply with ONE JSON object and nothing else. No markdown, no commentary.
 - The JSON must match this schema exactly:
   {
-    "title": string (3-80 chars, motivating),
-    "description": string (10-500 chars, what the mission feels like),
+    "archetype": string (exactly the archetype id you were given),
+    "title": string (3-80 chars, catchy and specific to THIS mission - never generic
+      filler like "Adventure Awaits"),
+    "objective": string (15-220 chars, ONE clear sentence: what the person will have
+      seen, found or done by the end),
+    "description": string (10-500 chars, a short narrative hook - 1-2 sentences that
+      pull the reader outside, not a summary of the tasks),
     "total_duration_minutes": integer,
     "tasks": [
-      {"instruction": string (10-280 chars), "target_minutes": integer,
+      {"instruction": string (10-280 chars, starts with a verb, contains a concrete
+        objective), "target_minutes": integer,
        "completion_mode": "manual" | "timer"}
     ],
     "completion_mode": "manual" | "timer",
@@ -196,9 +223,17 @@ STRICT OUTPUT RULES
   }
 - "completion_mode" meaning: "manual" = the person taps Done when finished;
   "timer" = the app shows a simple countdown for that task.
-- tasks: exactly 3 to 5 items, each 1-45 minutes, and they must add up to
-  roughly the requested total (between 60% and 140% of it).
+- tasks: exactly 3 to 5 items, each 1-45 minutes, and their target_minutes must add up
+  to EXACTLY the requested total duration.
 - total_duration_minutes MUST equal the requested duration.
+
+FIT THE REQUEST (hard rules)
+- Match the requested activity, energy level and difficulty in every task.
+- energy "high" -> at least one task with real physical effort (brisk walking, stairs,
+  hills, distance). energy "low" -> gentle only, no rushing or vigorous effort.
+- activity "move" -> at least one task that genuinely gets the body moving.
+- difficulty "push" -> include at least one stretch (brisk pace, hill, stairs, a longer
+  loop). difficulty "chill" -> never rush, race or compete; low stakes, high vibe.
 
 SAFETY AND SUITABILITY (hard rules)
 - Every task must be doable outdoors, in public, with no special equipment.
@@ -213,8 +248,11 @@ SAFETY AND SUITABILITY (hard rules)
 """
 
 
-def build_user_prompt(request: MissionRequest) -> str:
+def build_user_prompt(request: MissionRequest, archetype: Optional[ArchetypeSpec] = None) -> str:
+    archetype = archetype or select_archetype(request)
     lines = [
+        f"Mission archetype for this generation: {archetype.label} ({archetype.id.value})",
+        f"Archetype brief: {archetype.brief}",
         f"Activity: {request.activity.value.replace('_', ' ')}",
         f"Duration: {request.duration_minutes} minutes",
         f"Energy level: {request.energy.value}",
@@ -231,14 +269,19 @@ def build_user_prompt(request: MissionRequest) -> str:
 async def generate_mission(
     request: MissionRequest,
     provider: Optional[BaseProvider] = None,
+    archetype: Optional[ArchetypeSpec] = None,
 ) -> Mission:
     """Generate, validate, (optionally repair), and return a safe mission.
+
+    One archetype is selected per generation and drives the whole mission; it
+    is stamped onto the returned mission so the UI can show the flavour.
 
     Raises ProviderError when inference fails and MissionValidationError when
     the model output cannot be made valid. Never returns a fallback mission.
     """
     provider = provider or get_provider()
-    user_prompt = build_user_prompt(request)
+    archetype = archetype or select_archetype(request)
+    user_prompt = build_user_prompt(request, archetype)
     issues: List[dict] = []
 
     for attempt in range(1, MAX_ATTEMPTS + 1):
@@ -254,7 +297,7 @@ async def generate_mission(
             issues = [{"field": "root", "message": json_error or "invalid JSON"}]
             continue
 
-        result = validate_mission(data, request)
+        result = validate_mission(data, request, archetype=archetype)
         if result.ok and result.mission is not None:
             mission = result.mission
             mission.source = "ai"

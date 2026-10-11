@@ -138,6 +138,12 @@ code {
   white-space: nowrap;
 }
 
+.pill--archetype {
+  background: rgba(47, 125, 85, 0.12);
+  border-color: rgba(47, 125, 85, 0.35);
+  color: var(--forest-dark);
+}
+
 .chip {
   display: inline-flex;
   align-items: center;
@@ -652,6 +658,26 @@ code {
 .mission-card__description {
   margin: 0;
   color: var(--ink-soft);
+}
+
+.mission-card__objective {
+  margin: 0.15rem 0 0;
+  padding: 0.6rem 0.8rem;
+  border-left: 3px solid var(--moss);
+  border-radius: 0 8px 8px 0;
+  background: rgba(47, 125, 85, 0.07);
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.mission-card__objective-label {
+  display: block;
+  margin-bottom: 0.15rem;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--moss);
 }
 
 .mission-card__meta {

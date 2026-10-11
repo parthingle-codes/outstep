@@ -20,6 +20,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, List, Optional, Tuple
 
+from .archetypes import ArchetypeSpec, resolve_archetype
 from .config import VALID_DURATIONS
 from .schemas import ActivityType, CompletionMode, Difficulty, EnergyLevel, Mission, MissionRequest, MissionTask
 
@@ -65,6 +66,97 @@ MODE_SYNONYMS = {
     "timed": "timer",
     "countdown": "timer",
 }
+
+# --- Task quality: concreteness and distinctness ------------------------------
+#
+# The classic failure mode of an outdoor-mission model is padding a mission
+# with rewordings of the same vague instruction ("walk and notice things").
+# Two deterministic checks prevent it:
+#
+#   * concreteness - every task must carry at least one *concrete signal*
+#     (a count, a comparison, a deliverable verb, a named object...), so
+#     "notice your surroundings" is rejected but "count three red doors" passes
+#   * distinctness - tasks are reduced to canonical action/object tokens and
+#     compared pairwise; two tasks that are rewordings of one objective are
+#     rejected with feedback naming both tasks
+
+# Scaffolding words that never distinguish one objective from another.
+TASK_STOPWORDS = frozenset(
+    """
+    a an the and or but if then than of to in on at for with from by as is are was
+    were be been being am do does did done doing have has had having you your yours
+    yourself yourselves it its itself this that these those there here i me my mine
+    we our ours us they them their theirs he she him her hers him who whom whose
+    what where when how why which while during after before around about into out
+    up down off over under again also can could would should will shall may might
+    must let lets now so very really just even well back way get got take taking
+    spend spent time times min mins minutes minute second seconds head
+    """.split()
+)
+
+# Ordered specific -> generic: the first group found decides the task's primary
+# action, which is what the distinctness check compares.
+ACTION_GROUP_PATTERNS: List[Tuple[str, str]] = [
+    ("compare", r"\b(compare|versus|vs|match(ing)?|differ(ence|ent|s)?|similar(ity|ities)?|rank(ed|ing)?|sort(ed|ing)?|pair(ed|ing)? up)\b"),
+    ("count", r"\b(count(ing|s|ed)?|tally(ing|s|ed)?|how many|enumerate)\b"),
+    ("make", r"\b(draw|draws|drawing|sketch(es|ing)?|photograph(s|ed|ing)?|photo(s)?|snap(s|ped|ping)?|capture(s|d)?|writ(e|es|ing)|jot(s|ted|ting)?|note(s|d|ing)? down|record(s|ed|ing)?|list(s|ed|ing)?|name(s|d|ing)?|map(s|ped|ping)?|trace(s|d|ing)?|scribbl(e|es|ing)|log(s|ged|ging)?|recite(s|d|ing)?|spell(s|ed|ing)?|memoris(e|es|ing)|memoriz(e|es|ing)|add up|estimate(s|d)?|imagine|pretend)\b"),
+    ("find", r"\b(find|finds|finding|search(es|ed|ing)?|hunt(s|ed|ing)?|locat(e|es|ed|ing)|seek(ing)?|spot(s|ted|ting)?|pick(s|ed|ing)? out|choose|chose|select(s|ed|ing)?|collect(s|ed|ing)?|gather(s|ed|ing)?|checklist|bingo)\b"),
+    ("still", r"\b(sit(s|ting)?|stand(s|ing)?|stay|stays|staying|settl(e|es|ing)|pause(s|d|ing)?|stop(s|ping)?|linger(s|ing)?|perch(es|ed|ing)?|freeze|hold still|balance(s|d|ing)?)\b"),
+    ("listen", r"\b(listen(s|ing)?|hear(s|d|ing)?|sound(s)?|soundscape|noise(s)?)\b"),
+    ("observe", r"\b(notice(s|d|ing)?|observ(e|es|ed|ing)|look(s|ed|ing)?|watch(es|ed|ing)?|gaz(e|es|ed|ing)|admire(s|d|ing)?|inspect(s|ed|ing)?|stud(y|ies|ied)|peek(s|ed|ing)?|view(s|ed|ing)?|see|seeing)\b"),
+    ("relax", r"\b(relax(es|ed|ing)?|breath(e|es|ed|ing)|breathing|breath|calm(s|ed|ing)?|unwind(s|ing)?|chill(s|ed|ing)?|de-stress(es|ed|ing)?|meditat(e|es|ed|ing)|mindful(ness)?|unplug(s|ged|ging)?)\b"),
+    ("move", r"\b(walk(s|ed|ing)?|stroll(s|ed|ing)?|wander(s|ed|ing)?|roam(s|ed|ing)?|hike(s|d|ing)?|march(es|ed|ing)?|jog(s|ged|ging)?|run(s|ning)?|cycl(e|es|ed|ing)|rid(e|es|ing)|loop(s|ed|ing)?|lap(s|ped|ping)?|route(s|d)?|strid(e|es|ing)|ambl(e|es|ed|ing)|saunter(s|ed|ing)?|meander(s|ed|ing)?|drift(s|ed|ing)?|danc(e|es|ed|ing)|climb(s|ed|ing)?|skip(s|ped|ping|ing)?|travell?(s|ed|ing)|walkabout)\b"),
+]
+
+# Words that make a token count as the same objective across rewordings
+# ("walk" and "stroll" collapse to one token, as do "notice" and "observe").
+TOKEN_CANONICALS: dict = {}
+for _group, _synonyms in [
+    ("compare", ["compare", "versus", "match", "matching", "differ", "difference", "different", "distinct", "similar", "similarities", "rank", "sort"]),
+    ("count", ["count", "counting", "tally", "tallying", "enumerate", "many"]),
+    ("make", ["draw", "drawing", "sketch", "sketching", "photograph", "photo", "snap", "capture", "write", "writing", "jot", "note", "record", "list", "name", "naming", "map", "mapping", "trace", "tracing", "scribble", "log", "recite", "spell", "memorize", "memorise"]),
+    ("find", ["find", "finding", "search", "searching", "hunt", "hunting", "locate", "seek", "spot", "spotting", "pick", "choose", "select", "collect", "gather"]),
+    ("still", ["sit", "sitting", "stand", "standing", "stay", "staying", "settle", "pause", "stop", "linger", "perch", "freeze", "balance"]),
+    ("listen", ["listen", "listening", "hear", "hearing", "sound", "sounds", "soundscape", "noise"]),
+    ("observe", ["notice", "noticing", "observe", "observing", "look", "looking", "watch", "watching", "gaze", "admire", "inspect", "study", "peek", "view", "see", "seeing"]),
+    ("relax", ["relax", "relaxing", "breathe", "breathing", "breath", "calm", "unwind", "chill", "meditate", "mindful", "unplug"]),
+    ("move", ["walk", "walking", "stroll", "strolling", "wander", "roam", "hike", "march", "jog", "run", "running", "cycle", "cycling", "ride", "loop", "lap", "route", "stride", "amble", "saunter", "meander", "drift", "dance", "climb", "skip", "travelling", "traveling"]),
+    ("colour", ["colour", "colours", "color", "colors"]),
+]:
+    for _syn in _synonyms:
+        TOKEN_CANONICALS[_syn] = _group
+
+# Generic actions: the same generic action twice in one mission is padding,
+# even when the objects differ, unless both tasks are clearly concrete.
+GENERIC_ACTION_GROUPS = frozenset({"move", "observe", "listen", "relax", "still"})
+
+# A task is concrete when its instruction carries at least one of these signals:
+# a count, a comparison/angle, a deliverable verb, a named object, or a real
+# destination. Tasks with none of them are the "walk and notice" filler.
+CONCRETE_SIGNALS: List[str] = [
+    r"\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|\d+)\b",
+    r"\b(different|unique|compare|versus|vs|fewest|most|least|oldest|newest|largest|smallest|loudest|quietest|brightest|darkest|weirdest|strangest|oddest|fanciest|highest|lowest|longest|shortest|heaviest|biggest|tiniest|first|last|only|nearest|closest|furthest|farthest|new|weirdest)\b",
+    r"\b(until|at least|at most|no more than|no fewer than|no less than|each|every)\b",
+    r"\b(colou?rs?|textures?|shapes?|signs?|letters?|numbers?|doors?|doorways?|gates?|windows?|benches|bench|trees?|leaves|leaf|branches|bark|birds?|clouds?|shadows?|reflections?|footprints?|bricks?|graffiti|murals?|posters?|plaques?|mosaics?|tiles?|steps?|stairs|handrails?|railings?|walls?|roofs?|chimneys?|gutters?|drains?|smells?|scents?|breezes?|puddles?|cracks?|moss|fungi|mushrooms?|feathers?|shells?|stones?|pebbles?|twigs?|petals?|flowers?|weeds?|plants?|insects?|ants?|bees?|butterflies?|spiders?|webs?|squirrels?|pigeons?|ducks?|runners?|cyclists?|dog walkers?|passersby|strangers?|people|shops?|shopfronts?|postboxes?|letterboxes?|bins?|statues?|monuments?|fountains?|bridges?|arches?|kiosks?|lamp posts?|street names?|house numbers?|parking meters?|bollards?)\b",
+]
+
+# Fit checks: the mission must respect what the user asked for.
+EFFORT_PATTERN = r"\b(brisk|jog|jogging|run|running|sprint|sprinting|stair|stairs|hill|hills|uphill|ramp|ramps|cycl(e|es|ed|ing)|bike|danc(e|es|ed|ing)|skipping|skip rope|marching|march|sweat|sweating|climb|climbing|push-?ups?|squats?|lunges?|burpees?|star jumps?|strides?|laps?|fitness|workout|intervals?|pace)\b|\d+(\.\d+)?\s?(km|kilometre|kilometer|mile|miles|steps)\b"
+VIGOROUS_PATTERN = r"\b(sprint|sprinting|jog|jogging|run|running|vigorous|high-intensity|hiit|burpees?|racing|race|as fast as you can)\b"
+MOVEMENT_PATTERN = r"\b(walks?|walking|stroll|strolling|wander|roam|hike|hiking|march|jog|jogging|runs?|running|cycl(e|es|ed|ing)|rides?|riding|loop|loops|lap|laps|route|routes|strides?|amble|saunter|meander|dance|climbing|climb|skipping|traveling|travelling|drift)\b|\d+(\.\d+)?\s?(km|kilometre|kilometer|mile|miles|steps)\b"
+URGENCY_PATTERN = r"\b(race|racing|rush|rushing|hurry|hurrying|as fast as you can|beat your|personal best|no stopping|speed up|sprint|sprinting)\b"
+CHALLENGE_PATTERN = r"\b(brisk|hills?|stair|stairs|uphill|ramp|ramps|faster|quick|quickly|pace|challenge|challenging|push|pushing|stretch|stretched|extra|longer|further|farther|sweat|jog|jogging|runs?|running|sprint|sprinting|climb|climbing|loops?|laps?|circuit|intervals?|double|twice|three times)\b|\d+(\.\d+)?\s?(km|kilometre|kilometer|mile|miles|steps)\b"
+
+# Titles that are pure filler; a title must say something about *this* mission.
+GENERIC_TITLE_PATTERNS: List[str] = [
+    r"^(outdoor |nature |outdoors )?(adventure|mission|explore|exploration|walk|challenge|quest|journey|experience)( awaits| time| is here| is calling)?[!.]?$",
+    r"^get outside[!.]?$",
+    r"^mission (one|1)[!.]?$",
+]
+
+DUPLICATE_SIMILARITY_THRESHOLD = 0.45
+
+SUM_WINDOW = (0.8, 1.2)  # task minutes must add up to 80-120% of the request
 
 
 class MissionValidationError(Exception):
@@ -159,13 +251,216 @@ def normalize_mode(value: Any, default: CompletionMode) -> CompletionMode:
     return default
 
 
+# --- Task quality helpers -----------------------------------------------------
+
+def task_action(instruction: str) -> str:
+    """The task's primary action group (specific actions win over generic ones)."""
+    text = instruction.lower()
+    for group, pattern in ACTION_GROUP_PATTERNS:
+        if re.search(pattern, text):
+            return group
+    return "other"
+
+
+def task_is_concrete(instruction: str) -> bool:
+    """True when the instruction names a concrete objective, not vague filler."""
+    text = instruction.lower()
+    return any(re.search(pattern, text) for pattern in CONCRETE_SIGNALS)
+
+
+def _canonical_token(word: str) -> str:
+    base = word
+    if len(word) > 3 and word.endswith("s") and not word.endswith(("ss", "us", "is")):
+        base = word[:-1]
+    return TOKEN_CANONICALS.get(word) or TOKEN_CANONICALS.get(base) or base
+
+
+def canonical_tokens(instruction: str) -> set:
+    """Content tokens of a task, with synonyms collapsed so rewordings match.
+
+    "Walk through the park and notice three leaf shapes" and "stroll through
+    the neighbourhood and observe three shopfronts" both reduce to
+    {move, observe, three, compare, ...}, making their similarity obvious.
+    """
+    tokens = set()
+    for word in re.findall(r"[a-z0-9']+", instruction.lower()):
+        word = word.strip("'")
+        if not word or word in TASK_STOPWORDS:
+            continue
+        tokens.add(_canonical_token(word))
+    return tokens
+
+
+def task_quality_issues(entries: List[Tuple[int, str]]) -> List[dict]:
+    """Concreteness + distinctness issues for the mission's tasks.
+
+    `entries` is a list of (1-based task index, instruction) pairs.
+    """
+    issues: List[dict] = []
+    actions: List[str] = []
+    tokens: List[set] = []
+    concrete: List[bool] = []
+
+    for idx, text in entries:
+        actions.append(task_action(text))
+        tokens.append(canonical_tokens(text))
+        is_concrete = task_is_concrete(text)
+        concrete.append(is_concrete)
+        if not is_concrete:
+            issues.append(
+                {
+                    "field": f"tasks[{idx}].instruction",
+                    "message": (
+                        "task is too generic - give it ONE concrete objective (what exactly "
+                        "to find, count, compare, sketch or map). Walking, noticing "
+                        "surroundings, listening to sounds and relaxing are not objectives."
+                    ),
+                }
+            )
+
+    for i in range(len(entries)):
+        for j in range(i + 1, len(entries)):
+            idx_i, idx_j = entries[i][0], entries[j][0]
+            intersection = tokens[i] & tokens[j]
+            union = tokens[i] | tokens[j]
+            similarity = len(intersection) / len(union) if union else 0.0
+            same_action = actions[i] == actions[j] and actions[i] != "other"
+            both_weak = (not concrete[i]) or (not concrete[j])
+
+            if similarity >= DUPLICATE_SIMILARITY_THRESHOLD and (
+                same_action or len(intersection) >= 3
+            ):
+                issues.append(
+                    {
+                        "field": f"tasks[{idx_i}]/tasks[{idx_j}]",
+                        "message": (
+                            "these two tasks are rewordings of the same objective - give "
+                            "them different goals, actions or targets"
+                        ),
+                    }
+                )
+            elif (
+                same_action
+                and both_weak
+                and actions[i] in GENERIC_ACTION_GROUPS
+            ):
+                issues.append(
+                    {
+                        "field": f"tasks[{idx_i}]/tasks[{idx_j}]",
+                        "message": (
+                            "both tasks are the same generic "
+                            f"'{actions[i]}' instruction - make one of them do "
+                            "something concrete and different"
+                        ),
+                    }
+                )
+    return issues
+
+
+def request_fit_issues(entries: List[Tuple[int, str]], request: MissionRequest) -> List[dict]:
+    """Issues raised when the tasks ignore the requested activity/energy/difficulty."""
+    issues: List[dict] = []
+    if not entries:
+        return issues
+
+    def any_match(pattern: str) -> bool:
+        return any(re.search(pattern, text, re.IGNORECASE) for _, text in entries)
+
+    if request.energy is EnergyLevel.high and not any_match(EFFORT_PATTERN):
+        issues.append(
+            {
+                "field": "tasks",
+                "message": (
+                    "energy level is 'high' but no task asks for real physical effort - "
+                    "add brisk movement, stairs, hills or distance to at least one task"
+                ),
+            }
+        )
+
+    if request.energy is EnergyLevel.low:
+        for idx, text in entries:
+            match = re.search(VIGOROUS_PATTERN, text, re.IGNORECASE)
+            if match:
+                issues.append(
+                    {
+                        "field": f"tasks[{idx}].instruction",
+                        "message": (
+                            f"energy level is 'low' but this task asks for vigorous effort "
+                            f"('{match.group(0)}') - dial it down to a gentle pace"
+                        ),
+                    }
+                )
+
+    if request.activity is ActivityType.move and not any_match(MOVEMENT_PATTERN):
+        issues.append(
+            {
+                "field": "tasks",
+                "message": (
+                    "activity is 'move' but no task gets the body moving - at least one "
+                    "task should involve walking, stairs, cycling or similar"
+                ),
+            }
+        )
+
+    if request.difficulty is Difficulty.chill:
+        for idx, text in entries:
+            match = re.search(URGENCY_PATTERN, text, re.IGNORECASE)
+            if match:
+                issues.append(
+                    {
+                        "field": f"tasks[{idx}].instruction",
+                        "message": (
+                            f"difficulty is 'chill' but this task pushes the user "
+                            f"('{match.group(0)}') - remove the rush or competition"
+                        ),
+                    }
+                )
+
+    if request.difficulty is Difficulty.push and not any_match(CHALLENGE_PATTERN):
+        issues.append(
+            {
+                "field": "tasks",
+                "message": (
+                    "difficulty is 'push' but nothing stretches the user - add a brisk "
+                    "pace, a hill, stairs, a longer loop or extra distance to one task"
+                ),
+            }
+        )
+
+    return issues
+
+
+def title_issues(title: str) -> List[dict]:
+    """Reject pure-filler titles like 'Adventure Awaits'."""
+    lowered = title.strip().lower()
+    for pattern in GENERIC_TITLE_PATTERNS:
+        if re.match(pattern, lowered):
+            return [
+                {
+                    "field": "title",
+                    "message": (
+                        "title is too generic - make it specific to this mission's "
+                        "archetype and objective"
+                    ),
+                }
+            ]
+    return []
+
+
 # --- The validator -----------------------------------------------------------
 
-def validate_mission(raw: Any, request: MissionRequest) -> ValidationResult:
+def validate_mission(
+    raw: Any,
+    request: MissionRequest,
+    archetype: Optional[ArchetypeSpec] = None,
+) -> ValidationResult:
     """Validate raw model output against `request`.
 
     Returns a `ValidationResult`; `result.mission` is set only when the payload
     is safe and usable. Non-fatal normalizations are recorded in `warnings`.
+    `archetype` is the style the server selected for this generation; when it
+    is omitted, a valid archetype echoed by the model (or a fresh random pick)
+    is used instead.
     """
     issues: List[dict] = []
     warnings: List[str] = []
@@ -174,6 +469,9 @@ def validate_mission(raw: Any, request: MissionRequest) -> ValidationResult:
         issues.append({"field": "root", "message": "model output must be a JSON object"})
         return ValidationResult(issues=issues)
 
+    # --- archetype -------------------------------------------------------------
+    archetype_spec = resolve_archetype(raw, request, archetype)
+
     # --- title / description -------------------------------------------------
     title = _clean_text(raw.get("title"))
     if len(title) < 3:
@@ -181,6 +479,7 @@ def validate_mission(raw: Any, request: MissionRequest) -> ValidationResult:
     elif len(title) > 80:
         title = title[:80]
         warnings.append("title was shortened to 80 characters")
+    issues.extend(title_issues(title))
 
     description = _clean_text(raw.get("description"))
     if len(description) < 10:
@@ -188,6 +487,22 @@ def validate_mission(raw: Any, request: MissionRequest) -> ValidationResult:
     elif len(description) > 500:
         description = description[:500]
         warnings.append("description was shortened to 500 characters")
+
+    # --- objective -------------------------------------------------------------
+    objective = _clean_text(raw.get("objective"))
+    if len(objective) < 15:
+        issues.append(
+            {
+                "field": "objective",
+                "message": (
+                    "objective must be one clear sentence (at least 15 characters) "
+                    "stating what the person will have seen, found or done by the end"
+                ),
+            }
+        )
+    elif len(objective) > 300:
+        objective = objective[:300]
+        warnings.append("objective was shortened to 300 characters")
 
     # --- total duration ------------------------------------------------------
     total = _as_int(raw.get("total_duration_minutes"))
@@ -216,6 +531,7 @@ def validate_mission(raw: Any, request: MissionRequest) -> ValidationResult:
         issues.append({"field": "tasks", "message": f"must contain 3-5 tasks (got {len(tasks_raw)})"})
 
     tasks: List[MissionTask] = []
+    task_entries: List[Tuple[int, str]] = []  # (index, instruction) for quality checks
     target_sum = 0
     for idx, item in enumerate(tasks_raw, start=1):
         label = f"tasks[{idx}]"
@@ -229,6 +545,8 @@ def validate_mission(raw: Any, request: MissionRequest) -> ValidationResult:
         elif len(instruction) > 280:
             instruction = instruction[:280]
             warnings.append(f"task {idx} instruction shortened to 280 characters")
+        if instruction:
+            task_entries.append((idx, instruction))
 
         minutes_raw = (
             item["target_minutes"] if "target_minutes" in item else item.get("duration_minutes")
@@ -252,11 +570,11 @@ def validate_mission(raw: Any, request: MissionRequest) -> ValidationResult:
                 )
             )
 
-    # Task durations must be plausible for the requested total.
+    # Task durations must add up consistently to the requested total.
     effective_total = total if total in VALID_DURATIONS else request.duration_minutes
     if tasks:
-        minimum = int(effective_total * 0.6)
-        maximum = int(effective_total * 1.4)
+        minimum = int(effective_total * SUM_WINDOW[0])
+        maximum = int(effective_total * SUM_WINDOW[1])
         if target_sum < minimum or target_sum > maximum:
             issues.append(
                 {
@@ -275,6 +593,12 @@ def validate_mission(raw: Any, request: MissionRequest) -> ValidationResult:
                         "message": f"single task ({task.target_minutes} min) exceeds the whole mission",
                     }
                 )
+
+    # --- task quality: concrete objectives, all different ---------------------
+    issues.extend(task_quality_issues(task_entries))
+
+    # --- the mission must respect what the user asked for --------------------
+    issues.extend(request_fit_issues(task_entries, request))
 
     # --- safety notes --------------------------------------------------------
     safety_notes = _as_str_list(raw.get("safety_notes"))
@@ -315,6 +639,7 @@ def validate_mission(raw: Any, request: MissionRequest) -> ValidationResult:
     mission = Mission(
         title=title,
         description=description,
+        objective=objective,
         total_duration_minutes=effective_total,
         tasks=tasks,
         completion_mode=default_mode,
@@ -322,6 +647,7 @@ def validate_mission(raw: Any, request: MissionRequest) -> ValidationResult:
         activity=request.activity,
         energy=request.energy,
         difficulty=request.difficulty,
+        archetype=archetype_spec.id,
         warnings=warnings,
     )
     return ValidationResult(mission=mission, warnings=warnings)
@@ -341,6 +667,11 @@ SAMPLE_MISSION_PAYLOAD: dict = {
         "A gentle sample mission you can run without any AI: step outside, let your "
         " senses lead, and finish with a short note about what you noticed."
     ),
+    "objective": (
+        "Come home able to name three small things on your usual patch that you had "
+        "never clocked before."
+    ),
+    "archetype": "micro_explorer",
     "total_duration_minutes": 30,
     "completion_mode": "manual",
     "tasks": [
@@ -351,8 +682,8 @@ SAMPLE_MISSION_PAYLOAD: dict = {
             "completion_mode": "timer",
         },
         {
-            "instruction": "Follow a route you have never taken before and photograph or "
-            "sketch one texture you find interesting.",
+            "instruction": "Take a brisk walk along a route you have never taken before and "
+            "photograph or sketch one texture you find interesting.",
             "target_minutes": 12,
             "completion_mode": "manual",
         },
@@ -387,8 +718,8 @@ def build_sample_mission(request: Optional[MissionRequest] = None) -> Mission:
                 "completion_mode": "manual",
             },
             {
-                "instruction": "Finish with a slow lap of the block while your phone stays "
-                "in your pocket.",
+                "instruction": "Finish with a slow lap of the block, counting the windows "
+                "you pass with your phone in your pocket.",
                 "target_minutes": 4,
                 "completion_mode": "manual",
             },
@@ -396,9 +727,9 @@ def build_sample_mission(request: Optional[MissionRequest] = None) -> Mission:
     elif request.duration_minutes == 60:
         payload["tasks"].append(
             {
-                "instruction": "Find a bench, sit for fifteen minutes, and list five small "
+                "instruction": "Find a bench, sit for twenty-four minutes, and list five small "
                 "details within arm's reach that you had never noticed.",
-                "target_minutes": 20,
+                "target_minutes": 24,
                 "completion_mode": "timer",
             }
         )

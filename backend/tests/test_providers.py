@@ -7,12 +7,17 @@ import httpx
 import pytest
 
 from backend.providers import (
+    MAX_ATTEMPTS,
+    SYSTEM_PROMPT,
+    BaseProvider,
     OllamaProvider,
     OpenAICompatProvider,
     ProviderError,
     build_user_prompt,
+    generate_mission,
 )
-from backend.schemas import MissionRequest
+from backend.schemas import MissionArchetype, MissionRequest
+from backend.validation import MissionValidationError
 
 
 def run(coro):
@@ -165,3 +170,162 @@ def test_build_user_prompt_includes_preferences():
     assert "60 minutes" in prompt
     assert "high" in prompt
     assert "dog" in prompt
+
+
+def test_build_user_prompt_includes_archetype():
+    from backend.archetypes import get_archetype
+
+    request = MissionRequest(activity="observe", duration_minutes=30)
+    prompt = build_user_prompt(request, get_archetype("sound_mapper"))
+    assert "Sound Mapper" in prompt
+    assert "sound_mapper" in prompt
+    # The brief tells the model what the style looks like in practice.
+    assert "cartographer" in prompt.lower()
+
+
+def test_system_prompt_demands_creative_structure():
+    from backend.providers import SYSTEM_PROMPT
+
+    assert "archetype" in SYSTEM_PROMPT
+    assert "objective" in SYSTEM_PROMPT
+    assert "rewordings" in SYSTEM_PROMPT
+    assert "notice your surroundings" in SYSTEM_PROMPT  # listed as banned filler
+    assert "concrete objective" in SYSTEM_PROMPT
+    assert "EXACTLY the requested total" in SYSTEM_PROMPT
+
+
+def _valid_payload_json():
+    import json
+
+    from backend.schemas import MissionRequest as _MissionRequest
+    from backend.validation import build_sample_mission
+
+    payload = build_sample_mission(_MissionRequest(activity="explore_nature", duration_minutes=30))
+    data = payload.model_dump()
+    data.pop("source", None)
+    return json.dumps(data)
+
+
+def test_generate_mission_selects_archetype_and_stamps_it():
+    captured = {}
+
+    class CapturingProvider(BaseProvider):
+        name = "capture"
+        model = "capture-model"
+
+        async def complete(self, system, user):
+            captured["system"] = system
+            captured["user"] = user
+            return _valid_payload_json()
+
+    request = MissionRequest(activity="explore_nature", duration_minutes=30)
+    mission = run(generate_mission(request, provider=CapturingProvider()))
+
+    assert mission.archetype in MissionArchetype
+    assert mission.objective
+    # The selected archetype drives the prompt and is echoed in the user message.
+    assert mission.archetype.value in captured["user"]
+    assert captured["system"] == SYSTEM_PROMPT
+
+
+def test_generate_mission_honours_an_explicit_archetype():
+    captured = {}
+
+    class CapturingProvider(BaseProvider):
+        name = "capture"
+        model = "capture-model"
+
+        async def complete(self, system, user):
+            captured["user"] = user
+            return _valid_payload_json()
+
+    from backend.archetypes import get_archetype
+
+    spec = get_archetype("urban_archaeologist")
+    request = MissionRequest(activity="observe", duration_minutes=30)
+    mission = run(generate_mission(request, provider=CapturingProvider(), archetype=spec))
+
+    assert mission.archetype is MissionArchetype.urban_archaeologist
+    assert "Urban Archaeologist" in captured["user"]
+
+
+def test_generate_mission_repair_feedback_names_the_generic_tasks():
+    """When the model pads with filler, the retry prompt says exactly what to fix."""
+    import json
+
+    generic = {
+        "title": "Neighbourhood Wind-Down",
+        "description": "A gentle loop around your local streets with time to breathe.",
+        "objective": "Finish the walk feeling calmer than when you started out today.",
+        "total_duration_minutes": 30,
+        "tasks": [
+            {"instruction": "Take a slow walk through the park and enjoy the fresh air.",
+             "target_minutes": 8},
+            {"instruction": "Notice your surroundings and appreciate the small details.",
+             "target_minutes": 8},
+            {"instruction": "Listen to the sounds of nature around you.",
+             "target_minutes": 7},
+            {"instruction": "Relax and take a deep breath before heading home.",
+             "target_minutes": 7},
+        ],
+        "safety_notes": ["Stay on public paths and watch for cyclists."],
+    }
+
+    class RepairProvider(BaseProvider):
+        name = "repair"
+        model = "repair-model"
+
+        def __init__(self):
+            self.prompts = []
+
+        async def complete(self, system, user):
+            self.prompts.append(user)
+            if len(self.prompts) == 1:
+                return json.dumps(generic)
+            return _valid_payload_json()
+
+    provider = RepairProvider()
+    request = MissionRequest(activity="explore_nature", duration_minutes=30)
+    mission = run(generate_mission(request, provider=provider))
+
+    assert len(provider.prompts) == 2
+    repair_prompt = provider.prompts[1]
+    assert "rejected" in repair_prompt
+    assert "concrete objective" in repair_prompt
+
+
+def test_generate_mission_gives_up_after_max_attempts():
+    class AlwaysGenericProvider(BaseProvider):
+        name = "filler"
+        model = "filler-model"
+
+        def __init__(self):
+            self.calls = 0
+
+        async def complete(self, system, user):
+            self.calls += 1
+            import json
+
+            return json.dumps(
+                {
+                    "title": "Neighbourhood Wind-Down Loop",
+                    "description": "A gentle loop around your local streets with time.",
+                    "objective": "Finish the walk feeling calmer than when you started.",
+                    "total_duration_minutes": 30,
+                    "tasks": [
+                        {"instruction": "Take a slow walk through the park and breathe.",
+                         "target_minutes": 10},
+                        {"instruction": "Notice your surroundings and the small details.",
+                         "target_minutes": 10},
+                        {"instruction": "Listen to the sounds of nature around you.",
+                         "target_minutes": 10},
+                    ],
+                    "safety_notes": ["Stay on public paths and watch for cyclists."],
+                }
+            )
+
+    provider = AlwaysGenericProvider()
+    request = MissionRequest(activity="explore_nature", duration_minutes=30)
+    with pytest.raises(MissionValidationError):
+        run(generate_mission(request, provider=provider))
+    assert provider.calls == MAX_ATTEMPTS

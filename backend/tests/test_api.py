@@ -6,6 +6,7 @@ import json
 from fastapi.testclient import TestClient
 
 import backend.main as main
+from backend.archetypes import ARCHETYPE_IDS
 from backend.config import Settings
 from backend.main import app
 from backend.providers import BaseProvider, ProviderError
@@ -115,7 +116,7 @@ def test_generate_repairs_on_second_attempt(monkeypatch):
 
 
 def test_generate_fails_clearly_when_model_keeps_returning_junk(monkeypatch):
-    provider = FakeGoodProvider(["not json at all", "still not json"])
+    provider = FakeGoodProvider(["not json at all"] * 3)
     monkeypatch.setattr(main, "get_provider", lambda *a, **k: provider)
     response = client.post(
         "/api/generate-mission",
@@ -157,6 +158,27 @@ def test_unreachable_endpoint_returns_clear_error(monkeypatch):
     )
     assert response.status_code == 502
     assert "Could not reach" in response.json()["detail"]["message"]
+
+
+def test_generate_response_includes_objective_and_archetype(monkeypatch):
+    provider = FakeGoodProvider([valid_mission_json()])
+    monkeypatch.setattr(main, "get_provider", lambda *a, **k: provider)
+    response = client.post(
+        "/api/generate-mission",
+        json={"activity": "explore_nature", "duration_minutes": 30},
+    )
+    assert response.status_code == 200, response.text
+    mission = response.json()["mission"]
+    assert mission["objective"]
+    assert mission["archetype"] in ARCHETYPE_IDS
+
+
+def test_sample_mission_includes_objective_and_archetype():
+    response = client.get("/api/sample-mission")
+    assert response.status_code == 200
+    mission = response.json()["mission"]
+    assert mission["objective"]
+    assert mission["archetype"] == "micro_explorer"
 
 
 def test_summarize_endpoint_mirrors_timing_rules():

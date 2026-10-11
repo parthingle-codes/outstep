@@ -84,14 +84,25 @@ npm test                    # browser timing logic (mirrors backend/timing.py)
 
 1. **Choose** — Explore Nature / Move / Clear My Head / Observe, then 15/30/60 minutes, energy,
    difficulty, and optional free-text context.
-2. **Generate** — `POST /api/generate-mission` prompts the configured open-weight model for a
-   strict JSON mission: title, description, 3–5 tasks with target minutes, completion mode
-   (`manual` or `timer`), and safety notes.
-3. **Validate** — Pydantic schema checks plus deterministic rules: task durations must be
-   sensible for the requested total (60–140%), instructions must be doable outdoors in public,
-   and dangerous/trespassing/illegal content is rejected. Invalid output gets **one repair
-   retry** fed with the exact issues; if it still fails, you get a clear error — never a fake
-   mission.
+2. **Generate** — `POST /api/generate-mission` first picks a **mission archetype** for the
+   generation (Visual Detective, Nature Bingo, Urban Archaeologist, Colour Quest, Pattern
+   Breaker, Sound Mapper, Route Quest, Micro-Explorer, Movement Quest — matched to the chosen
+   activity/energy, drawn at random among the best fits so repeats stay fresh). The configured
+   open-weight model then writes a strict JSON mission in that style: catchy title, short
+   narrative hook (`description`), one-sentence `objective`, and 3–5 tasks with target minutes,
+   completion mode (`manual` or `timer`), and safety notes.
+3. **Validate** — Pydantic schema checks plus deterministic quality rules:
+   - every task must carry a **concrete objective** (a count, comparison, deliverable verb or
+     named target) — "notice your surroundings" / "listen to the sounds" filler is rejected;
+   - no two tasks may be **rewordings of one another** (tasks are reduced to canonical
+     action/object tokens and compared pairwise);
+   - task durations must be 1–45 min and add up consistently to the requested total (80–120%);
+   - the mission must respect the requested **activity, energy and difficulty** (e.g. high
+     energy needs a real-effort task, low energy may not sprint);
+   - instructions must be doable outdoors in public, and dangerous/trespassing/illegal
+     content is rejected.
+   Invalid output gets **repair retries** fed with the exact issues; if it still fails, you get
+   a clear error — never a fake mission.
 4. **Run** — the mission card turns into a screen-free dusk-themed activity view. You start,
    complete, or skip tasks, pause/resume, end early, or keep going past the planned time.
    Elapsed time is always computed from **saved timestamps**, not from a ticking counter, so a
@@ -118,8 +129,9 @@ model. It is never presented as AI output.
 ├── backend/
 │   ├── main.py          # FastAPI app: API routes + serving the built frontend
 │   ├── config.py        # env-driven settings (provider, model, keys, CORS)
-│   ├── schemas.py       # Pydantic models: request + mission contract
-│   ├── validation.py    # deterministic validation, safety scan, sample mission
+│   ├── schemas.py       # Pydantic models: request + mission contract (incl. archetype)
+│   ├── archetypes.py    # the 9 mission archetypes + per-generation selection
+│   ├── validation.py    # deterministic validation, quality gates, safety scan, sample mission
 │   ├── providers.py     # Ollama / OpenAI-compatible providers + generation loop
 │   ├── timing.py        # pure time math (mirrored by frontend/src/lib/timing.js)
 │   └── tests/           # pytest suite (validation, timing, API, providers)
@@ -129,8 +141,9 @@ model. It is never presented as AI output.
 │       ├── App.jsx              # view state machine + run lifecycle
 │       ├── api.js               # backend client (no keys, ever)
 │       ├── storage.js           # localStorage persistence
-│       ├── constants.js         # activities, durations, energy, difficulty
+│       ├── constants.js         # activities, durations, energy, difficulty, archetypes
 │       ├── lib/timing.js        # timestamp math, mirrors backend/timing.py
+│       ├── lib/mission.js       # mission display helpers (archetype, objective, totals)
 │       ├── components/          # Setup, Generating, MissionCard, Active, Summary, History, Icons
 │       └── styles.css           # OutStep design system (paper → dusk themes)
 ├── dist/                # production build output (generated, git-ignored)
