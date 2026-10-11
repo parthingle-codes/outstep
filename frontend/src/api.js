@@ -11,10 +11,14 @@ async function request(path, options = {}) {
       ...options,
     })
   } catch {
+    const offline = typeof navigator !== 'undefined' && navigator.onLine === false
     const error = new Error(
-      'Could not reach the OutStep server. Is the backend running on port 8000?',
+      offline
+        ? "You're offline. Mission generation needs a connection — go outside (ironically), then reconnect and try again."
+        : 'Could not reach the OutStep server. Is the backend running on port 8000?',
     )
     error.issues = []
+    error.offline = offline
     throw error
   }
 
