@@ -1,0 +1,30 @@
+{
+  "name": "OutStep — Explore. Breathe. Live more.",
+  "short_name": "OutStep",
+  "description": "OutStep is an open-source AI outdoor companion. The AI plans the adventure. The app tracks the adventure. The human experiences the adventure.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#FFFEF7",
+  "theme_color": "#12301f",
+  "icons": [
+    {
+      "src": "/pwa-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa-maskable-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

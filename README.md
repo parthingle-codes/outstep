@@ -1,6 +1,10 @@
-# OutStep 🌱
+# OutStep
 
-**Step out. Experience more.**
+<p align="center">
+  <img src="frontend/public/outstep-logo-full.png" width="180" alt="OutStep — leaf and sun logo" />
+</p>
+
+**Explore. Breathe. Live more.**
 
 OutStep is an open-source, mobile-first AI outdoor companion. You pick what kind of mission you
 want, how long you have, and how hard it should be — an open-weight model turns that into a
@@ -136,7 +140,8 @@ model. It is never presented as AI output.
 │   ├── timing.py        # pure time math (mirrored by frontend/src/lib/timing.js)
 │   └── tests/           # pytest suite (validation, timing, API, providers)
 ├── frontend/
-│   ├── index.html
+│   ├── index.html         # head: favicon, apple-touch-icon, PWA manifest link
+│   ├── public/            # brand assets: logo, leaf-and-sun mark, PWA icons, manifest
 │   └── src/
 │       ├── App.jsx              # view state machine + run lifecycle
 │       ├── api.js               # backend client (no keys, ever)

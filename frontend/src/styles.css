@@ -202,11 +202,28 @@ code {
   margin-bottom: 0.5rem;
 }
 
+/* Brand mark image: the cream tile gets a soft rounded edge that sits
+   quietly on the paper background at any size. */
+.logo-mark {
+  display: block;
+  border-radius: 20%;
+  border: 1px solid var(--line);
+}
+
 .brand__name {
   font-family: var(--font-display);
   font-size: 1.5rem;
   font-weight: 700;
   letter-spacing: -0.02em;
+}
+
+/* Wordmark: "Out" in deep forest green, "Step" in leafy green. */
+.brand__word--out {
+  color: var(--forest-dark);
+}
+
+.brand__word--step {
+  color: var(--forest);
 }
 
 .hero {

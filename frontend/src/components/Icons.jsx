@@ -1,24 +1,16 @@
 /* Small inline SVG icon set — no icon dependency, works offline. */
 
+/* The approved OutStep brand mark: minimalist leaf and warm sun. */
 export function Logo({ size = 28 }) {
   return (
-    <svg width={size} height={size} viewBox="0 0 48 48" fill="none" aria-hidden="true">
-      <circle cx="24" cy="24" r="22" fill="currentColor" opacity="0.12" />
-      <path
-        d="M8 32c4-1 6-6 10-6s5 4 9 4 6-8 13-9"
-        stroke="currentColor"
-        strokeWidth="3"
-        strokeLinecap="round"
-      />
-      <circle cx="34" cy="14" r="5" fill="currentColor" />
-      <path
-        d="M14 38c3-2 7-2 10 0"
-        stroke="currentColor"
-        strokeWidth="3"
-        strokeLinecap="round"
-        opacity="0.55"
-      />
-    </svg>
+    <img
+      className="logo-mark"
+      src="/outstep-mark.png"
+      width={size}
+      height={size}
+      alt=""
+      aria-hidden="true"
+    />
   )
 }
 

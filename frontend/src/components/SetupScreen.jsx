@@ -76,9 +76,12 @@ export default function SetupScreen({
           <span className="brand__mark">
             <Logo size={34} />
           </span>
-          <span className="brand__name">OutStep</span>
+          <span className="brand__name">
+            <span className="brand__word brand__word--out">Out</span>
+            <span className="brand__word brand__word--step">Step</span>
+          </span>
         </div>
-        <p className="hero__tagline">Step out. Experience more.</p>
+        <p className="hero__tagline">Explore. Breathe. Live more.</p>
         <p className="hero__philosophy">
           The AI plans the adventure. The app tracks the adventure. The human experiences the
           adventure.
